@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img">
+<defs>
+  <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+    <path d="M0,0 L0,6 L9,3 z" fill="#3561D8"/>
+  </marker>
+</defs>
+<rect width="1200" height="360" rx="24" fill="#F5F7F9"/>
+<text x="48" y="48" text-anchor="start" font-family="'Noto Sans CJK KR','Malgun Gothic','Apple SD Gothic Neo',Arial,sans-serif" font-size="27" font-weight="800" fill="#151F32">다변량 센서 이상 탐지 | System Overview</text>
+<text x="48" y="76" text-anchor="start" font-family="'Noto Sans CJK KR','Malgun Gothic','Apple SD Gothic Neo',Arial,sans-serif" font-size="15" font-weight="500" fill="#5F6675">정상 데이터 학습부터 Reconstruction Error 기반 추론까지의 전체 흐름</text>
+
+<rect x="48" y="116" width="190" height="136" rx="16" fill="#FFFFFF" stroke="#D9E0E8"/>
+<rect x="48" y="116" width="8" height="136" rx="4" fill="#21AFC4"/>
+<text x="72" y="150" text-anchor="start" font-family="'Noto Sans CJK KR','Malgun Gothic','Apple SD Gothic Neo',Arial,sans-serif" font-size="16" font-weight="800" fill="#151F32">1. SENSOR DATA</text>
+<text x="72" y="177" text-anchor="start" font-family="'Noto Sans CJK KR','Malgun Gothic','Apple SD Gothic Neo',Arial,sans-serif" font-size="14" font-weight="500" fill="#5F6675">Temperature</text>
+<text x="72" y="199" text-anchor="start" font-family="'Noto Sans CJK KR','Malgun Gothic','Apple SD Gothic Neo',Arial,sans-serif" font-size="14" font-weight="500" fill="#5F6675">Vibration</text>
+<text x="72" y="221" text-anchor="start" font-family="'Noto Sans CJK KR','Malgun Gothic','Apple SD Gothic Neo',Arial,sans-serif" font-size="14" font-weight="500" fill="#5F6675">Pressure, Humidity</text>
+<rect x="278" y="116" width="190" height="136" rx="16" fill="#FFFFFF" stroke="#D9E0E8"/>
+<rect x="278" y="116" width="8" height="136" rx="4" fill="#3561D8"/>
+<text x="302" y="150" text-anchor="start" font-family="'Noto Sans CJK KR','Malgun Gothic','Apple SD Gothic Neo',Arial,sans-serif" font-size="16" font-weight="800" fill="#151F32">2. PREPROCESS</text>
+<text x="302" y="177" text-anchor="start" font-family="'Noto Sans CJK KR','Malgun Gothic','Apple SD Gothic Neo',Arial,sans-serif" font-size="14" font-weight="500" fill="#5F6675">Missing Values</text>
+<text x="302" y="199" text-anchor="start" font-family="'Noto Sans CJK KR','Malgun Gothic','Apple SD Gothic Neo',Arial,sans-serif" font-size="14" font-weight="500" fill="#5F6675">Split</text>
+<text x="302" y="221" text-anchor="start" font-family="'Noto Sans CJK KR','Malgun Gothic','Apple SD Gothic Neo',Arial,sans-serif" font-size="14" font-weight="500" fill="#5F6675">StandardScaler</text>
+<rect x="508" y="116" width="190" height="136" rx="16" fill="#FFFFFF" stroke="#D9E0E8"/>
+<rect x="508" y="116" width="8" height="136" rx="4" fill="#151F32"/>
+<text x="532" y="150" text-anchor="start" font-family="'Noto Sans CJK KR','Malgun Gothic','Apple SD Gothic Neo',Arial,sans-serif" font-size="16" font-weight="800" fill="#151F32">3. TRAIN</text>
+<text x="532" y="177" text-anchor="start" font-family="'Noto Sans CJK KR','Malgun Gothic','Apple SD Gothic Neo',Arial,sans-serif" font-size="14" font-weight="500" fill="#5F6675">Normal-only</text>
+<text x="532" y="199" text-anchor="start" font-family="'Noto Sans CJK KR','Malgun Gothic','Apple SD Gothic Neo',Arial,sans-serif" font-size="14" font-weight="500" fill="#5F6675">AutoEncoder</text>
+<text x="532" y="221" text-anchor="start" font-family="'Noto Sans CJK KR','Malgun Gothic','Apple SD Gothic Neo',Arial,sans-serif" font-size="14" font-weight="500" fill="#5F6675">MSE Loss</text>
+<rect x="738" y="116" width="190" height="136" rx="16" fill="#FFFFFF" stroke="#D9E0E8"/>
+<rect x="738" y="116" width="8" height="136" rx="4" fill="#EAA12B"/>
+<text x="762" y="150" text-anchor="start" font-family="'Noto Sans CJK KR','Malgun Gothic','Apple SD Gothic Neo',Arial,sans-serif" font-size="16" font-weight="800" fill="#151F32">4. EVALUATE</text>
+<text x="762" y="177" text-anchor="start" font-family="'Noto Sans CJK KR','Malgun Gothic','Apple SD Gothic Neo',Arial,sans-serif" font-size="14" font-weight="500" fill="#5F6675">Validation Error</text>
+<text x="762" y="199" text-anchor="start" font-family="'Noto Sans CJK KR','Malgun Gothic','Apple SD Gothic Neo',Arial,sans-serif" font-size="14" font-weight="500" fill="#5F6675">95 Percentile</text>
+<text x="762" y="221" text-anchor="start" font-family="'Noto Sans CJK KR','Malgun Gothic','Apple SD Gothic Neo',Arial,sans-serif" font-size="14" font-weight="500" fill="#5F6675">Metrics</text>
+<rect x="968" y="116" width="184" height="136" rx="16" fill="#FFFFFF" stroke="#D9E0E8"/>
+<rect x="968" y="116" width="8" height="136" rx="4" fill="#2FA66A"/>
+<text x="992" y="150" text-anchor="start" font-family="'Noto Sans CJK KR','Malgun Gothic','Apple SD Gothic Neo',Arial,sans-serif" font-size="16" font-weight="800" fill="#151F32">5. SERVE</text>
+<text x="992" y="177" text-anchor="start" font-family="'Noto Sans CJK KR','Malgun Gothic','Apple SD Gothic Neo',Arial,sans-serif" font-size="14" font-weight="500" fill="#5F6675">CLI</text>
+<text x="992" y="199" text-anchor="start" font-family="'Noto Sans CJK KR','Malgun Gothic','Apple SD Gothic Neo',Arial,sans-serif" font-size="14" font-weight="500" fill="#5F6675">FastAPI /predict</text>
+<text x="992" y="221" text-anchor="start" font-family="'Noto Sans CJK KR','Malgun Gothic','Apple SD Gothic Neo',Arial,sans-serif" font-size="14" font-weight="500" fill="#5F6675">Normal / Anomaly</text>
+
+<line x1="238" y1="184" x2="278" y2="184" stroke="#3561D8" stroke-width="3" marker-end="url(#arrow)"/>
+<line x1="468" y1="184" x2="508" y2="184" stroke="#3561D8" stroke-width="3" marker-end="url(#arrow)"/>
+<line x1="698" y1="184" x2="738" y2="184" stroke="#3561D8" stroke-width="3" marker-end="url(#arrow)"/>
+<line x1="928" y1="184" x2="968" y2="184" stroke="#3561D8" stroke-width="3" marker-end="url(#arrow)"/>
+
+<rect x="363" y="294" width="474" height="42" rx="12" fill="#FFFFFF" stroke="#D9E0E8"/>
+<text x="600" y="321" text-anchor="middle" font-family="'Noto Sans CJK KR','Malgun Gothic','Apple SD Gothic Neo',Arial,sans-serif" font-size="15" font-weight="700" fill="#151F32">Inference Consistency: Feature Order + Scaler + Model + Threshold</text>
+</svg>
