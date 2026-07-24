@@ -2,7 +2,7 @@
 
 **Normal-only AutoEncoder Training, Reconstruction Error Evaluation, and FastAPI Inference**
 
-> 온도, 진동, 압력, 습도 센서의 전처리부터 PyTorch AutoEncoder 학습 코드, Reconstruction Error 평가, CLI와 FastAPI 추론까지 연결한 이상 탐지 파이프라인입니다.
+> 온도, 진동, 압력, 습도 센서의 데이터 생성과 전처리부터 PyTorch AutoEncoder 학습 Loop, Reconstruction Error 평가, CLI와 FastAPI 추론까지 연결한 이상 탐지 파이프라인입니다.
 
 <p>
   <img src="https://img.shields.io/badge/Python-3.11-3561D8?style=flat-square&logo=python&logoColor=white" alt="Python">
@@ -43,26 +43,20 @@
 | **기술** | Python, pandas, NumPy, scikit-learn, PyTorch, FastAPI, Pydantic |
 | **구현 결과** | 데이터 생성, 전처리, 학습 Loop, 평가, CLI와 `/predict` API 코드를 하나의 실행 흐름으로 연결 |
 
-### Public Evidence Boundary
+### Implementation Status
 
-공개 저장소에서 확인할 수 있는 것은 다음 범위입니다.
+| 구분 | 구현 범위 |
+|---|---|
+| **Data** | 샘플 센서 데이터 생성, 결측치 처리, Train·Validation·Test Split |
+| **Preprocessing** | Train 기준 StandardScaler Fit과 평가·추론 재사용 |
+| **Model** | `4 → 8 → 2 → 8 → 4` PyTorch AutoEncoder |
+| **Training** | Normal-only DataLoader, MSE Loss, Adam, Validation Loss |
+| **Artifact Output** | Model Checkpoint, Scaler, Train History 저장 경로 |
+| **Evaluation** | Reconstruction Error, Validation Threshold, Precision·Recall·F1·Confusion Matrix |
+| **Inference** | 단일 입력 CLI와 FastAPI `/predict` |
+| **Documentation** | 실행 순서, 구조, 설계 이유와 확장 방향 |
 
-- AutoEncoder Architecture
-- 정상 Sample 기반 Training Loop
-- MSE Loss와 Adam Optimizer
-- Validation Loss 계산
-- Checkpoint와 학습 이력 저장 코드
-- Reconstruction Error 평가 코드
-- CLI와 FastAPI 추론 코드
-
-다음 Artifact는 공개 저장소에 Commit되어 있지 않습니다.
-
-- 실제 학습된 Model Checkpoint
-- 실행으로 생성된 Dataset
-- Train History 결과 파일
-- 전체 Test Evaluation 결과 파일
-
-따라서 이 README에서는 **“모델을 학습해 성능을 달성했다”가 아니라 “학습·평가·추론 파이프라인을 구성했다”**고 표현합니다.
+> 저장소는 학습 결과 수치를 강조하기보다, 데이터를 준비해 학습·평가·추론을 실행할 수 있는 전체 구조를 보여주는 데 초점을 둡니다.
 
 ---
 
@@ -95,7 +89,7 @@
 - Training Loop는 입력과 복원 결과의 MSE를 줄이도록 구성했습니다.
 - 추론에서는 Reconstruction Error와 Threshold를 비교하도록 구현했습니다.
 
-> `4 → 8 → 2 → 8 → 4`가 산업 현장의 최적 구조라는 의미는 아닙니다. 현재 프로젝트의 4개 Feature와 작은 학습 범위에서 학습·평가·추론 Pipeline을 검증하기 위한 경량 Baseline입니다.
+> `4 → 8 → 2 → 8 → 4` 구조는 4개 Sensor Feature를 대상으로 전처리, Training Loop, Threshold, 평가와 API 추론을 명확하게 연결하기 위한 경량 Baseline입니다.
 
 ---
 
@@ -139,18 +133,18 @@ reconstruction_error <= threshold → normal
 
 ---
 
-## Why Not Transformer
+## Model Choice and Transformer Extension
 
-현재 버전에는 Transformer를 사용하지 않았습니다.
+현재 버전은 행 단위 4개 Sensor Feature를 입력으로 사용하므로 Dense AutoEncoder를 Baseline으로 선택했습니다.
 
-| 현재 데이터와 목표 | Transformer를 사용하지 않은 이유 |
+| 현재 데이터와 목표 | Dense AutoEncoder를 우선한 이유 |
 |---|---|
 | 한 행에 4개 센서값 | Token 또는 Time Step 사이의 Attention을 학습할 Sequence가 없음 |
 | 시간 Window 미구성 | 과거 여러 시점의 변화와 장기 의존성을 입력하지 않음 |
 | 작은 생성 Dataset | Transformer Parameter를 안정적으로 비교할 근거가 부족함 |
 | Baseline Pipeline 검증 | 먼저 전처리, 정상 학습, Threshold, 평가, API 흐름을 명확히 검증하는 것이 우선 |
 
-Transformer를 적용하려면 먼저 입력을 다음처럼 바꿔야 합니다.
+시간 흐름을 학습하는 Transformer로 확장하려면 입력을 Sequence Window 형태로 구성해야 합니다.
 
 ```text
 Current:
@@ -209,15 +203,15 @@ Future Sequence Window:
 
 | 실무 관점 | 평가 기준 | 프로젝트에서 충족한 범위 |
 |---|---|---|
-| **이상 누락 확인** | Anomaly Recall, False Negative | Recall과 Confusion Matrix를 평가 코드에 포함 |
-| **정상 오탐 관리** | Precision, False Positive | Precision과 정상 오탐 사례를 함께 해석 |
-| **Threshold 독립성** | Test가 아닌 Validation으로 기준 설정 | 정상 Validation Error의 95 Percentile 사용 |
+| **이상 누락 확인** | Anomaly Recall, False Negative | Recall과 Confusion Matrix를 산출하는 평가 흐름 구현 |
+| **정상 오탐 관리** | Precision, False Positive | Precision과 False Positive를 함께 확인할 수 있도록 구성 |
+| **Threshold 독립성** | Test가 아닌 Validation으로 기준 설정 | 정상 Validation Error의 95 Percentile 산출 코드 구현 |
 | **전처리 일관성** | 학습과 추론의 Feature 순서와 Scale 동일 | 저장된 StandardScaler를 CLI와 API에서 재사용 |
-| **평가 범위** | Accuracy, Precision, Recall, F1, Confusion Matrix | `src/evaluate.py`에서 다중 지표 산출 |
+| **평가 범위** | Accuracy, Precision, Recall, F1, Confusion Matrix | `src/evaluate.py`에서 다중 지표 산출 흐름 구현 |
 | **추론 재현성** | Model, Scaler, Threshold와 Input Schema 연결 | CLI와 FastAPI `/predict` 구현 |
 | **운영 한계 인식** | Drift, 실제 설비 데이터, Sequence Window 구분 | 현재 범위와 다음 개선 과제를 문서화 |
 
-> 현재 프로젝트는 **정상 데이터 기반 학습 Loop, Validation Threshold 산출, 다중 지표 평가, CLI와 API 추론 구조를 코드로 구성한 범위**를 충족했습니다. 공개 저장소에는 재현 가능한 학습 결과 Artifact가 포함되어 있지 않으므로 모델 성능 달성을 주장하지 않습니다.
+> 현재 프로젝트는 **정상 데이터 기반 Training Loop, Validation Threshold 산출, 다중 지표 평가, CLI와 API 추론 구조를 하나의 Pipeline으로 연결한 범위**를 충족했습니다.
 
 ---
 
@@ -323,7 +317,7 @@ Threshold는 정상 Validation Sample의 Reconstruction Error 분포에서 95 Pe
 - F1 Score
 - Confusion Matrix
 
-현재 README에는 샘플 실행 결과가 기록돼 있지만, 공개 저장소에 Model Checkpoint와 전체 평가 Artifact가 Commit되어 있지 않습니다. 따라서 특정 Recall, Precision, F1을 대표 성과로 사용하지 않고, 학습·평가 코드와 실행 파이프라인 구현 범위만 설명합니다.
+이 README에서는 특정 성능 수치를 대표 성과로 제시하기보다, Threshold 산출과 다중 지표 평가가 가능한 구현 구조를 중심으로 설명합니다.
 
 </details>
 
@@ -366,7 +360,7 @@ API 입력은 Pydantic `SensorInput`으로 검증합니다.
 - Validation Percentile Threshold
 - CLI와 FastAPI 추론
 - Sequence Window를 사용하는 시계열 모델은 아님
-- 공개 Repository에는 Source와 문서를 Commit하고, 생성 데이터와 Model Artifact는 제외
+- Source Code 중심으로 구성되며 Dataset, Checkpoint와 평가 결과는 실행 과정에서 로컬 생성
 
 ### Next Steps
 
@@ -496,12 +490,30 @@ outputs/    # 전처리 데이터, 학습 기록, 평가 결과
 ## What This Project Demonstrates
 
 - 온도, 진동, 압력, 습도 다변량 센서 전처리 경험
-- 정상 데이터만 사용하는 PyTorch AutoEncoder Training Loop 구성 경험
-- Reconstruction Error와 Validation Threshold 산출 파이프라인 구성 경험
-- Accuracy 단독 평가 대신 Precision, Recall, F1과 Confusion Matrix를 확인한 경험
+- 정상 데이터 기반 PyTorch AutoEncoder Training Loop 설계와 구현 경험
+- Reconstruction Error와 Validation Percentile Threshold를 평가 흐름에 연결한 경험
+- Accuracy 단독 평가를 피하고 Precision, Recall, F1과 Confusion Matrix를 함께 산출하도록 구성한 경험
 - Train 기준 Scaler를 평가와 추론에 재사용한 경험
 - Model, Scaler, Threshold를 CLI와 FastAPI 입력 흐름에 연결하도록 구현한 경험
-- 구현된 범위와 시계열 모델이 아닌 점을 구분해 설명한 경험
+- 현재 행 단위 Baseline과 향후 Sequence Model 확장 조건을 구분한 경험
+
+---
+
+## Implementation Takeaway
+
+이 프로젝트의 핵심 결과는 특정 성능 수치가 아니라 다음 전체 흐름을 코드로 연결한 것입니다.
+
+```text
+Data Generation
+→ Preprocessing
+→ Normal-only Training Loop
+→ Validation Threshold
+→ Multi-metric Evaluation
+→ CLI Inference
+→ FastAPI Inference
+```
+
+실제 Sensor Dataset을 연결하고 Pipeline을 실행하면 같은 구조에서 Model Checkpoint, Threshold와 평가 결과를 생성할 수 있습니다.
 
 ---
 
