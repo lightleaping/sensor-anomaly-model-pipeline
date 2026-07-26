@@ -1,136 +1,346 @@
-﻿import argparse
-from pathlib import Path
+from __future__ import annotations
 
+import argparse
+from pathlib import Path
+from typing import Any
+
+import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.metrics import classification_report, confusion_matrix, precision_recall_fscore_support
+from sklearn.metrics import (
+    accuracy_score,
+    average_precision_score,
+    classification_report,
+    confusion_matrix,
+    f1_score,
+    precision_recall_curve,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
 
-from model import SensorAutoEncoder, reconstruction_error
+from src.artifacts import load_checkpoint, write_json
+from src.config import (
+    DEFAULT_CONFUSION_MATRIX_PATH,
+    DEFAULT_ERROR_DISTRIBUTION_PATH,
+    DEFAULT_METRICS_JSON_PATH,
+    DEFAULT_METRICS_PATH,
+    DEFAULT_MODEL_PATH,
+    DEFAULT_PREDICTIONS_PATH,
+    DEFAULT_PREPROCESSED_PATH,
+    DEFAULT_PR_CURVE_PATH,
+    DEFAULT_REPORT_METRICS_PATH,
+    DEFAULT_REPORT_PATH,
+    FEATURE_COLUMNS,
+    PROJECT_ROOT,
+    project_path,
+)
+from src.model import SensorAutoEncoder, reconstruction_error
+
+
+def _plot_confusion_matrix(cm: np.ndarray, output_path: Path) -> None:
+    figure, axis = plt.subplots(figsize=(5.5, 4.5))
+    image = axis.imshow(cm, cmap="Blues")
+    figure.colorbar(image, ax=axis)
+    axis.set_title("Confusion matrix")
+    axis.set_xlabel("Predicted label")
+    axis.set_ylabel("True label")
+    axis.set_xticks([0, 1], labels=["Normal", "Anomaly"])
+    axis.set_yticks([0, 1], labels=["Normal", "Anomaly"])
+    for row in range(2):
+        for column in range(2):
+            axis.text(
+                column,
+                row,
+                str(cm[row, column]),
+                ha="center",
+                va="center",
+                color="white" if cm[row, column] > cm.max() / 2 else "black",
+            )
+    figure.tight_layout()
+    figure.savefig(output_path, dpi=150)
+    plt.close(figure)
+
+
+def _plot_error_distribution(
+    errors: np.ndarray,
+    labels: np.ndarray,
+    threshold: float,
+    output_path: Path,
+) -> None:
+    figure, axis = plt.subplots(figsize=(7, 4.5))
+    axis.hist(errors[labels == 0], bins=35, alpha=0.65, label="Normal")
+    axis.hist(errors[labels == 1], bins=35, alpha=0.65, label="Anomaly")
+    axis.axvline(
+        threshold,
+        color="black",
+        linestyle="--",
+        linewidth=1.5,
+        label=f"Threshold ({threshold:.3f})",
+    )
+    axis.set_xlabel("Reconstruction error")
+    axis.set_ylabel("Samples")
+    axis.set_title("Test reconstruction-error distribution")
+    axis.legend()
+    figure.tight_layout()
+    figure.savefig(output_path, dpi=150)
+    plt.close(figure)
+
+
+def _plot_precision_recall(
+    labels: np.ndarray,
+    errors: np.ndarray,
+    average_precision: float,
+    output_path: Path,
+) -> None:
+    precision, recall, _ = precision_recall_curve(labels, errors)
+    baseline = float(labels.mean())
+    figure, axis = plt.subplots(figsize=(6, 4.5))
+    axis.plot(recall, precision, label=f"AP={average_precision:.3f}")
+    axis.axhline(
+        baseline,
+        color="gray",
+        linestyle="--",
+        label=f"Positive rate={baseline:.3f}",
+    )
+    axis.set_xlabel("Recall")
+    axis.set_ylabel("Precision")
+    axis.set_title("Precision-recall curve")
+    axis.set_xlim(0, 1)
+    axis.set_ylim(0, 1.02)
+    axis.legend()
+    figure.tight_layout()
+    figure.savefig(output_path, dpi=150)
+    plt.close(figure)
+
+
+def _write_model_card(
+    output_path: str | Path,
+    checkpoint: dict[str, Any],
+    metrics: dict[str, Any],
+    report_metrics_path: Path,
+) -> Path:
+    path = project_path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    confusion = metrics["confusion_matrix"]
+    try:
+        report_metrics_display = report_metrics_path.relative_to(PROJECT_ROOT).as_posix()
+    except ValueError:
+        report_metrics_display = report_metrics_path.as_posix()
+    content = f"""# Sensor Autoencoder Model Card
+
+## Model
+
+- Version: `{checkpoint.get("model_version", "unknown")}`
+- Architecture: `{checkpoint["input_dim"]} → {checkpoint.get("hidden_dim", 8)} → {checkpoint["latent_dim"]} → {checkpoint.get("hidden_dim", 8)} → {checkpoint["input_dim"]}`
+- Features: {", ".join(checkpoint["feature_columns"])}
+- Training data: normal samples only
+- Decision rule: reconstruction error > validation {checkpoint["threshold_percentile"]}th percentile
+- Threshold: `{metrics["threshold"]:.6f}`
+
+## Held-out test results
+
+| Metric | Value |
+|---|---:|
+| Accuracy | {metrics["accuracy"]:.4f} |
+| Precision | {metrics["precision"]:.4f} |
+| Recall | {metrics["recall"]:.4f} |
+| F1 | {metrics["f1_score"]:.4f} |
+| Specificity | {metrics["specificity"]:.4f} |
+| ROC AUC | {metrics["roc_auc"]:.4f} |
+| Average precision | {metrics["average_precision"]:.4f} |
+
+Confusion matrix: TN={confusion["true_negative"]}, FP={confusion["false_positive"]}, FN={confusion["false_negative"]}, TP={confusion["true_positive"]}.
+
+The machine-readable evaluation summary is stored in `{report_metrics_display}`.
+
+## Intended use
+
+This model is a reproducible row-level baseline for detecting unusual combinations of temperature, vibration, pressure, and humidity. It is suitable for demos and pipeline verification.
+
+## Limitations
+
+- The checked-in evaluation is based on synthetic data, not a production machine.
+- The model does not use temporal windows, so it cannot learn trend or sequence anomalies.
+- The threshold must be recalibrated after sensor replacement, operating-regime changes, or data drift.
+- A prediction is an operational signal, not a diagnosis of equipment failure.
+"""
+    path.write_text(content, encoding="utf-8")
+    return path
 
 
 def evaluate_model(
-    data_path: str = "outputs/preprocessed_data.npz",
-    model_path: str = "models/autoencoder.pt",
-    metrics_path: str = "outputs/evaluation_metrics.csv",
-    predictions_path: str = "outputs/test_predictions.csv",
-    confusion_matrix_path: str = "outputs/confusion_matrix.png",
-    threshold_percentile: float = 95.0,
-) -> None:
-    data_file = Path(data_path)
-    model_file = Path(model_path)
-
+    data_path: str | Path = DEFAULT_PREPROCESSED_PATH,
+    model_path: str | Path = DEFAULT_MODEL_PATH,
+    metrics_path: str | Path = DEFAULT_METRICS_PATH,
+    metrics_json_path: str | Path = DEFAULT_METRICS_JSON_PATH,
+    predictions_path: str | Path = DEFAULT_PREDICTIONS_PATH,
+    confusion_matrix_path: str | Path = DEFAULT_CONFUSION_MATRIX_PATH,
+    error_distribution_path: str | Path = DEFAULT_ERROR_DISTRIBUTION_PATH,
+    pr_curve_path: str | Path = DEFAULT_PR_CURVE_PATH,
+    report_path: str | Path = DEFAULT_REPORT_PATH,
+    report_metrics_path: str | Path = DEFAULT_REPORT_METRICS_PATH,
+    threshold_override: float | None = None,
+) -> dict[str, Any]:
+    data_file = project_path(data_path)
     if not data_file.exists():
-        raise FileNotFoundError(f"Preprocessed data not found: {data_file}")
+        raise FileNotFoundError(
+            f"Preprocessed data not found: {data_file}. "
+            "Run `python -m src.pipeline` first."
+        )
 
-    if not model_file.exists():
-        raise FileNotFoundError(f"Model file not found: {model_file}")
+    with np.load(data_file) as data:
+        X_test = data["X_test"].astype(np.float32)
+        X_test_raw = (
+            data["X_test_raw"].astype(np.float32)
+            if "X_test_raw" in data
+            else X_test.copy()
+        )
+        y_test = data["y_test"].astype(np.int64)
+        test_indices = (
+            data["test_indices"].astype(np.int64)
+            if "test_indices" in data
+            else np.arange(len(y_test))
+        )
 
-    data = np.load(data_file)
-    X_val = data["X_val"].astype(np.float32)
-    X_test = data["X_test"].astype(np.float32)
-    y_test = data["y_test"].astype(np.int64)
+    if set(np.unique(y_test)) != {0, 1}:
+        raise ValueError("The test split must contain both normal and anomaly labels")
 
-    checkpoint = torch.load(model_file, map_location="cpu")
+    checkpoint = load_checkpoint(model_path)
     model = SensorAutoEncoder(
-        input_dim=checkpoint["input_dim"],
-        latent_dim=checkpoint["latent_dim"],
+        input_dim=int(checkpoint["input_dim"]),
+        latent_dim=int(checkpoint["latent_dim"]),
+        hidden_dim=int(checkpoint.get("hidden_dim", 8)),
     )
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
 
+    test_tensor = torch.from_numpy(X_test)
     with torch.no_grad():
-        val_tensor = torch.tensor(X_val)
-        test_tensor = torch.tensor(X_test)
+        test_errors = reconstruction_error(test_tensor, model(test_tensor)).numpy()
 
-        val_reconstructed = model(val_tensor)
-        test_reconstructed = model(test_tensor)
+    threshold = (
+        float(threshold_override)
+        if threshold_override is not None
+        else float(checkpoint["threshold"])
+    )
+    if not np.isfinite(threshold) or threshold < 0:
+        raise ValueError("threshold must be a finite non-negative value")
+    y_pred = (test_errors > threshold).astype(np.int64)
 
-        val_errors = reconstruction_error(val_tensor, val_reconstructed).numpy()
-        test_errors = reconstruction_error(test_tensor, test_reconstructed).numpy()
-
-    threshold = float(np.percentile(val_errors, threshold_percentile))
-    y_pred = (test_errors > threshold).astype(int)
-
-    precision, recall, f1, _ = precision_recall_fscore_support(
+    cm = confusion_matrix(y_test, y_pred, labels=[0, 1])
+    true_negative, false_positive, false_negative, true_positive = (
+        int(value) for value in cm.ravel()
+    )
+    precision = float(precision_score(y_test, y_pred, zero_division=0))
+    recall = float(recall_score(y_test, y_pred, zero_division=0))
+    specificity = (
+        true_negative / (true_negative + false_positive)
+        if true_negative + false_positive
+        else 0.0
+    )
+    metrics = {
+        "threshold": threshold,
+        "threshold_percentile": float(checkpoint["threshold_percentile"]),
+        "accuracy": float(accuracy_score(y_test, y_pred)),
+        "precision": precision,
+        "recall": recall,
+        "f1_score": float(f1_score(y_test, y_pred, zero_division=0)),
+        "specificity": float(specificity),
+        "false_positive_rate": float(1.0 - specificity),
+        "roc_auc": float(roc_auc_score(y_test, test_errors)),
+        "average_precision": float(average_precision_score(y_test, test_errors)),
+        "test_size": int(len(y_test)),
+        "normal_count": int((y_test == 0).sum()),
+        "anomaly_count": int((y_test == 1).sum()),
+        "confusion_matrix": {
+            "true_negative": true_negative,
+            "false_positive": false_positive,
+            "false_negative": false_negative,
+            "true_positive": true_positive,
+        },
+    }
+    report = classification_report(
         y_test,
         y_pred,
-        average="binary",
+        target_names=["normal", "anomaly"],
+        output_dict=True,
         zero_division=0,
     )
+    payload = {
+        "model_version": checkpoint.get("model_version", "unknown"),
+        "model_trained_at": checkpoint.get("trained_at"),
+        "metrics": metrics,
+        "classification_report": report,
+    }
 
-    cm = confusion_matrix(y_test, y_pred)
+    metrics_file = project_path(metrics_path)
+    predictions_file = project_path(predictions_path)
+    cm_file = project_path(confusion_matrix_path)
+    error_file = project_path(error_distribution_path)
+    pr_file = project_path(pr_curve_path)
+    for path in (metrics_file, predictions_file, cm_file, error_file, pr_file):
+        path.parent.mkdir(parents=True, exist_ok=True)
 
-    metrics = pd.DataFrame([
-        {
-            "threshold_percentile": threshold_percentile,
-            "threshold": threshold,
-            "precision": precision,
-            "recall": recall,
-            "f1_score": f1,
-            "test_size": len(y_test),
-            "normal_count": int((y_test == 0).sum()),
-            "anomaly_count": int((y_test == 1).sum()),
-        }
-    ])
+    flat_metrics = {
+        key: value
+        for key, value in metrics.items()
+        if key != "confusion_matrix"
+    }
+    flat_metrics.update(metrics["confusion_matrix"])
+    pd.DataFrame([flat_metrics]).to_csv(
+        metrics_file, index=False, encoding="utf-8-sig"
+    )
 
-    predictions = pd.DataFrame({
-        "y_true": y_test,
-        "y_pred": y_pred,
-        "reconstruction_error": test_errors,
-    })
-
-    metrics_file = Path(metrics_path)
-    predictions_file = Path(predictions_path)
-    cm_file = Path(confusion_matrix_path)
-
-    metrics_file.parent.mkdir(parents=True, exist_ok=True)
-    predictions_file.parent.mkdir(parents=True, exist_ok=True)
-    cm_file.parent.mkdir(parents=True, exist_ok=True)
-
-    metrics.to_csv(metrics_file, index=False, encoding="utf-8-sig")
+    predictions = pd.DataFrame(X_test_raw, columns=FEATURE_COLUMNS)
+    predictions.insert(0, "source_index", test_indices)
+    predictions["y_true"] = y_test
+    predictions["y_pred"] = y_pred
+    predictions["reconstruction_error"] = test_errors
+    predictions["threshold"] = threshold
+    predictions["error_margin"] = test_errors - threshold
     predictions.to_csv(predictions_file, index=False, encoding="utf-8-sig")
 
-    plt.figure(figsize=(5, 4))
-    plt.imshow(cm)
-    plt.title("Confusion Matrix")
-    plt.xlabel("Predicted Label")
-    plt.ylabel("True Label")
-    plt.xticks([0, 1], ["Normal", "Anomaly"])
-    plt.yticks([0, 1], ["Normal", "Anomaly"])
-
-    for i in range(cm.shape[0]):
-        for j in range(cm.shape[1]):
-            plt.text(j, i, str(cm[i, j]), ha="center", va="center")
-
-    plt.tight_layout()
-    plt.savefig(cm_file)
-    plt.close()
+    metrics_json_file = write_json(metrics_json_path, payload)
+    report_metrics_file = write_json(report_metrics_path, payload)
+    _plot_confusion_matrix(cm, cm_file)
+    _plot_error_distribution(test_errors, y_test, threshold, error_file)
+    _plot_precision_recall(
+        y_test, test_errors, metrics["average_precision"], pr_file
+    )
+    model_card_file = _write_model_card(
+        report_path, checkpoint, metrics, report_metrics_file
+    )
 
     print("Evaluation completed")
-    print(f"Threshold: {threshold:.6f}")
-    print(f"Precision: {precision:.4f}")
-    print(f"Recall: {recall:.4f}")
-    print(f"F1-score: {f1:.4f}")
-    print()
-    print(classification_report(y_test, y_pred, target_names=["normal", "anomaly"], zero_division=0))
-    print(f"Saved metrics: {metrics_file}")
-    print(f"Saved predictions: {predictions_file}")
-    print(f"Saved confusion matrix: {cm_file}")
+    print(
+        f"Accuracy={metrics['accuracy']:.4f} | Precision={precision:.4f} | "
+        f"Recall={recall:.4f} | F1={metrics['f1_score']:.4f}"
+    )
+    print(
+        f"Confusion matrix: TN={true_negative}, FP={false_positive}, "
+        f"FN={false_negative}, TP={true_positive}"
+    )
+    print(f"Metrics: {metrics_json_file}")
+    print(f"Model card: {model_card_file}")
+    return payload
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--data", default="outputs/preprocessed_data.npz")
-    parser.add_argument("--model", default="models/autoencoder.pt")
-    parser.add_argument("--threshold-percentile", type=float, default=95.0)
+    parser = argparse.ArgumentParser(description="Evaluate a trained sensor model.")
+    parser.add_argument("--data", default=str(DEFAULT_PREPROCESSED_PATH))
+    parser.add_argument("--model", default=str(DEFAULT_MODEL_PATH))
+    parser.add_argument("--threshold", type=float)
     args = parser.parse_args()
 
     evaluate_model(
         data_path=args.data,
         model_path=args.model,
-        threshold_percentile=args.threshold_percentile,
+        threshold_override=args.threshold,
     )
 
 

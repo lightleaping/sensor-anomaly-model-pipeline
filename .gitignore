@@ -1,12 +1,19 @@
-﻿.venv/
+.venv*/
+.python311/
 __pycache__/
 *.pyc
+.pytest_cache/
+.coverage
+*.egg-info/
+.pip-install.*.log
+.pipeline.*.log
 
 data/*.csv
 
 models/*.pt
 models/*.pth
 models/*.pkl
+models/*.json
 
 outputs/*.png
 outputs/*.csv

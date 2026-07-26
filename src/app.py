@@ -1,98 +1,87 @@
-﻿from pathlib import Path
-import pickle
+from __future__ import annotations
 
-import numpy as np
-import torch
-from fastapi import FastAPI
-from pydantic import BaseModel, Field
+from contextlib import asynccontextmanager
+from typing import Callable
 
-from src.model import SensorAutoEncoder, reconstruction_error
+from fastapi import FastAPI, Request
+from pydantic import BaseModel, ConfigDict, Field
 
-
-MODEL_PATH = Path("models/autoencoder.pt")
-SCALER_PATH = Path("models/scaler.pkl")
-THRESHOLD = 1.569104552268982
+from src.predict import AnomalyPredictor
 
 
 class SensorInput(BaseModel):
-    temperature: float = Field(..., example=30.0)
-    vibration: float = Field(..., example=0.35)
-    pressure: float = Field(..., example=100.0)
-    humidity: float = Field(..., example=45.0)
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "temperature": 30.0,
+                "vibration": 0.35,
+                "pressure": 100.0,
+                "humidity": 45.0,
+            }
+        }
+    )
+
+    temperature: float = Field(ge=-100, le=300)
+    vibration: float = Field(ge=0, le=100)
+    pressure: float = Field(ge=0, le=1000)
+    humidity: float = Field(ge=0, le=100)
 
 
 class PredictionResponse(BaseModel):
     prediction: str
     reconstruction_error: float
     threshold: float
-    input: SensorInput
+    error_margin: float
+    feature_errors: dict[str, float]
+    model_version: str
+    input: dict[str, float]
 
 
-app = FastAPI(
-    title="Sensor Anomaly Detection API",
-    description="PyTorch AutoEncoder 기반 센서 데이터 이상탐지 추론 API",
-    version="1.0.0",
-)
+def create_app(
+    predictor_factory: Callable[[], AnomalyPredictor] = AnomalyPredictor,
+) -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(application: FastAPI):
+        application.state.predictor = predictor_factory()
+        yield
 
-
-def load_model_and_scaler():
-    if not MODEL_PATH.exists():
-        raise FileNotFoundError(f"Model file not found: {MODEL_PATH}")
-
-    if not SCALER_PATH.exists():
-        raise FileNotFoundError(f"Scaler file not found: {SCALER_PATH}")
-
-    checkpoint = torch.load(MODEL_PATH, map_location="cpu")
-
-    model = SensorAutoEncoder(
-        input_dim=checkpoint["input_dim"],
-        latent_dim=checkpoint["latent_dim"],
-    )
-    model.load_state_dict(checkpoint["model_state_dict"])
-    model.eval()
-
-    with open(SCALER_PATH, "rb") as f:
-        scaler = pickle.load(f)
-
-    return model, scaler
-
-
-model, scaler = load_model_and_scaler()
-
-
-@app.get("/")
-def root():
-    return {
-        "message": "Sensor Anomaly Detection API",
-        "model": "PyTorch AutoEncoder",
-        "endpoint": "/predict",
-    }
-
-
-@app.post("/predict", response_model=PredictionResponse)
-def predict(input_data: SensorInput):
-    sample = np.array(
-        [[
-            input_data.temperature,
-            input_data.vibration,
-            input_data.pressure,
-            input_data.humidity,
-        ]],
-        dtype=np.float32,
+    application = FastAPI(
+        title="Sensor Anomaly Detection API",
+        description=(
+            "Normal-only PyTorch autoencoder inference with a checkpoint-bound "
+            "validation threshold."
+        ),
+        version="2.0.0",
+        lifespan=lifespan,
     )
 
-    sample_scaled = scaler.transform(sample).astype(np.float32)
+    @application.get("/")
+    def root(request: Request) -> dict[str, str]:
+        predictor: AnomalyPredictor = request.app.state.predictor
+        return {
+            "service": "Sensor Anomaly Detection API",
+            "model_version": predictor.model_version,
+            "health": "/health",
+            "predict": "/predict",
+            "docs": "/docs",
+        }
 
-    with torch.no_grad():
-        sample_tensor = torch.tensor(sample_scaled)
-        reconstructed = model(sample_tensor)
-        error = reconstruction_error(sample_tensor, reconstructed).item()
+    @application.get("/health")
+    def health(request: Request) -> dict[str, object]:
+        predictor: AnomalyPredictor = request.app.state.predictor
+        return {
+            "status": "ok",
+            "model_loaded": True,
+            "model_version": predictor.model_version,
+            "threshold": round(predictor.threshold, 6),
+        }
 
-    is_anomaly = error > THRESHOLD
+    @application.post("/predict", response_model=PredictionResponse)
+    def predict(input_data: SensorInput, request: Request) -> dict[str, object]:
+        predictor: AnomalyPredictor = request.app.state.predictor
+        return predictor.predict(input_data.model_dump())
 
-    return PredictionResponse(
-        prediction="anomaly" if is_anomaly else "normal",
-        reconstruction_error=round(error, 6),
-        threshold=round(THRESHOLD, 6),
-        input=input_data,
-    )
+    return application
+
+
+app = create_app()

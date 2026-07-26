@@ -1,7 +1,9 @@
-﻿pandas
-numpy
-scikit-learn
-matplotlib
-torch
-fastapi
-uvicorn
+numpy>=2.0,<3
+pandas>=2.2,<4
+scikit-learn>=1.5,<2
+matplotlib>=3.9,<4
+torch>=2.4,<3
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+httpx>=0.27,<1
+pytest>=8,<10
