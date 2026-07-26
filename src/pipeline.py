@@ -4,7 +4,7 @@ import argparse
 from datetime import datetime, timezone
 
 from src.artifacts import write_json
-from src.config import DEFAULT_RUN_SUMMARY_PATH
+from src.config import DEFAULT_README_PATH, DEFAULT_RUN_SUMMARY_PATH
 from src.evaluate import evaluate_model
 from src.generate_data import generate_sensor_data
 from src.predict import AnomalyPredictor
@@ -45,7 +45,7 @@ def run_pipeline(
     )
 
     print("\nStep 4/5 - Evaluate")
-    evaluation = evaluate_model()
+    evaluation = evaluate_model(readme_path=DEFAULT_README_PATH)
     metrics = evaluation["metrics"]
 
     print("\nStep 5/5 - Smoke-test inference")

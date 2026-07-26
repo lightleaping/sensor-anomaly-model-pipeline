@@ -2,6 +2,7 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_README_PATH = PROJECT_ROOT / "README.md"
 
 FEATURE_COLUMNS = ("temperature", "vibration", "pressure", "humidity")
 LABEL_COLUMN = "label"

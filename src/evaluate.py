@@ -14,9 +14,11 @@ import torch
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
+    balanced_accuracy_score,
     classification_report,
     confusion_matrix,
     f1_score,
+    matthews_corrcoef,
     precision_recall_curve,
     precision_score,
     recall_score,
@@ -33,6 +35,7 @@ from src.config import (
     DEFAULT_PREDICTIONS_PATH,
     DEFAULT_PREPROCESSED_PATH,
     DEFAULT_PR_CURVE_PATH,
+    DEFAULT_README_PATH,
     DEFAULT_REPORT_METRICS_PATH,
     DEFAULT_REPORT_PATH,
     FEATURE_COLUMNS,
@@ -122,6 +125,7 @@ def _write_model_card(
     output_path: str | Path,
     checkpoint: dict[str, Any],
     metrics: dict[str, Any],
+    anomaly_type_metrics: dict[str, dict[str, Any]],
     report_metrics_path: Path,
 ) -> Path:
     path = project_path(output_path)
@@ -131,6 +135,11 @@ def _write_model_card(
         report_metrics_display = report_metrics_path.relative_to(PROJECT_ROOT).as_posix()
     except ValueError:
         report_metrics_display = report_metrics_path.as_posix()
+    anomaly_rows = "\n".join(
+        f"| `{name}` | {values['support']} | {values['detected']} | "
+        f"{values['recall']:.4f} | {values['mean_error']:.4f} |"
+        for name, values in anomaly_type_metrics.items()
+    )
     content = f"""# Sensor Autoencoder Model Card
 
 ## Model
@@ -150,11 +159,19 @@ def _write_model_card(
 | Precision | {metrics["precision"]:.4f} |
 | Recall | {metrics["recall"]:.4f} |
 | F1 | {metrics["f1_score"]:.4f} |
+| Balanced accuracy | {metrics["balanced_accuracy"]:.4f} |
 | Specificity | {metrics["specificity"]:.4f} |
 | ROC AUC | {metrics["roc_auc"]:.4f} |
 | Average precision | {metrics["average_precision"]:.4f} |
+| Matthews correlation coefficient | {metrics["matthews_correlation_coefficient"]:.4f} |
 
 Confusion matrix: TN={confusion["true_negative"]}, FP={confusion["false_positive"]}, FN={confusion["false_negative"]}, TP={confusion["true_positive"]}.
+
+## Anomaly-type detection
+
+| Anomaly type | Support | Detected | Recall | Mean error |
+|---|---:|---:|---:|---:|
+{anomaly_rows}
 
 The machine-readable evaluation summary is stored in `{report_metrics_display}`.
 
@@ -173,6 +190,86 @@ This model is a reproducible row-level baseline for detecting unusual combinatio
     return path
 
 
+def _calculate_anomaly_type_metrics(
+    anomaly_types: np.ndarray,
+    labels: np.ndarray,
+    predictions: np.ndarray,
+    errors: np.ndarray,
+) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for anomaly_type in sorted(set(anomaly_types[labels == 1].tolist())):
+        mask = (labels == 1) & (anomaly_types == anomaly_type)
+        support = int(mask.sum())
+        detected = int(predictions[mask].sum())
+        result[str(anomaly_type)] = {
+            "support": support,
+            "detected": detected,
+            "missed": support - detected,
+            "recall": detected / support if support else 0.0,
+            "mean_error": float(errors[mask].mean()) if support else 0.0,
+            "median_error": float(np.median(errors[mask])) if support else 0.0,
+        }
+    return result
+
+
+def _update_readme_evaluation(
+    readme_path: str | Path | None,
+    checkpoint: dict[str, Any],
+    metrics: dict[str, Any],
+    anomaly_type_metrics: dict[str, dict[str, Any]],
+) -> Path | None:
+    if readme_path is None:
+        return None
+    path = project_path(readme_path)
+    if not path.exists():
+        return None
+
+    start_marker = "<!-- EVALUATION_RESULTS_START -->"
+    end_marker = "<!-- EVALUATION_RESULTS_END -->"
+    content = path.read_text(encoding="utf-8")
+    if start_marker not in content or end_marker not in content:
+        raise ValueError(
+            f"README evaluation markers are missing from {path}: "
+            f"{start_marker}, {end_marker}"
+        )
+
+    confusion = metrics["confusion_matrix"]
+    anomaly_rows = "\n".join(
+        f"| `{name}` | {values['support']} | {values['detected']} | "
+        f"{values['recall']:.4f} |"
+        for name, values in anomaly_type_metrics.items()
+    )
+    generated = f"""{start_marker}
+> 이 표는 `python -m src.pipeline` 실행 시 `reports/evaluation_summary.json`에서 자동 갱신됩니다.
+
+| 항목 | 결과 |
+|---|---:|
+| Model version | `{checkpoint.get("model_version", "unknown")}` |
+| Test samples | {metrics["test_size"]} |
+| Threshold | {metrics["threshold"]:.6f} |
+| Accuracy | {metrics["accuracy"]:.4f} |
+| Balanced Accuracy | {metrics["balanced_accuracy"]:.4f} |
+| Precision | {metrics["precision"]:.4f} |
+| Recall | {metrics["recall"]:.4f} |
+| F1 | {metrics["f1_score"]:.4f} |
+| Specificity | {metrics["specificity"]:.4f} |
+| ROC AUC | {metrics["roc_auc"]:.4f} |
+| Average Precision | {metrics["average_precision"]:.4f} |
+| MCC | {metrics["matthews_correlation_coefficient"]:.4f} |
+| Confusion Matrix | TN {confusion["true_negative"]} · FP {confusion["false_positive"]} · FN {confusion["false_negative"]} · TP {confusion["true_positive"]} |
+
+이상 유형별 탐지 결과:
+
+| 유형 | Test 수 | 탐지 | Recall |
+|---|---:|---:|---:|
+{anomaly_rows}
+{end_marker}"""
+    before = content.split(start_marker, 1)[0]
+    after = content.split(end_marker, 1)[1]
+    path.write_text(before + generated + after, encoding="utf-8")
+    return path
+
+
 def evaluate_model(
     data_path: str | Path = DEFAULT_PREPROCESSED_PATH,
     model_path: str | Path = DEFAULT_MODEL_PATH,
@@ -184,6 +281,7 @@ def evaluate_model(
     pr_curve_path: str | Path = DEFAULT_PR_CURVE_PATH,
     report_path: str | Path = DEFAULT_REPORT_PATH,
     report_metrics_path: str | Path = DEFAULT_REPORT_METRICS_PATH,
+    readme_path: str | Path | None = None,
     threshold_override: float | None = None,
 ) -> dict[str, Any]:
     data_file = project_path(data_path)
@@ -205,6 +303,16 @@ def evaluate_model(
             data["test_indices"].astype(np.int64)
             if "test_indices" in data
             else np.arange(len(y_test))
+        )
+        test_sample_ids = (
+            data["test_sample_ids"].astype(str)
+            if "test_sample_ids" in data
+            else test_indices.astype(str)
+        )
+        test_anomaly_types = (
+            data["test_anomaly_types"].astype(str)
+            if "test_anomaly_types" in data
+            else np.where(y_test == 1, "anomaly", "normal")
         )
 
     if set(np.unique(y_test)) != {0, 1}:
@@ -243,17 +351,28 @@ def evaluate_model(
         if true_negative + false_positive
         else 0.0
     )
+    negative_predictive_value = (
+        true_negative / (true_negative + false_negative)
+        if true_negative + false_negative
+        else 0.0
+    )
     metrics = {
         "threshold": threshold,
         "threshold_percentile": float(checkpoint["threshold_percentile"]),
         "accuracy": float(accuracy_score(y_test, y_pred)),
+        "balanced_accuracy": float(balanced_accuracy_score(y_test, y_pred)),
         "precision": precision,
         "recall": recall,
         "f1_score": float(f1_score(y_test, y_pred, zero_division=0)),
         "specificity": float(specificity),
+        "negative_predictive_value": float(negative_predictive_value),
         "false_positive_rate": float(1.0 - specificity),
+        "false_negative_rate": float(1.0 - recall),
         "roc_auc": float(roc_auc_score(y_test, test_errors)),
         "average_precision": float(average_precision_score(y_test, test_errors)),
+        "matthews_correlation_coefficient": float(
+            matthews_corrcoef(y_test, y_pred)
+        ),
         "test_size": int(len(y_test)),
         "normal_count": int((y_test == 0).sum()),
         "anomaly_count": int((y_test == 1).sum()),
@@ -264,6 +383,9 @@ def evaluate_model(
             "true_positive": true_positive,
         },
     }
+    anomaly_type_metrics = _calculate_anomaly_type_metrics(
+        test_anomaly_types, y_test, y_pred, test_errors
+    )
     report = classification_report(
         y_test,
         y_pred,
@@ -275,6 +397,7 @@ def evaluate_model(
         "model_version": checkpoint.get("model_version", "unknown"),
         "model_trained_at": checkpoint.get("trained_at"),
         "metrics": metrics,
+        "anomaly_type_metrics": anomaly_type_metrics,
         "classification_report": report,
     }
 
@@ -298,6 +421,8 @@ def evaluate_model(
 
     predictions = pd.DataFrame(X_test_raw, columns=FEATURE_COLUMNS)
     predictions.insert(0, "source_index", test_indices)
+    predictions.insert(1, "sample_id", test_sample_ids)
+    predictions.insert(2, "anomaly_type", test_anomaly_types)
     predictions["y_true"] = y_test
     predictions["y_pred"] = y_pred
     predictions["reconstruction_error"] = test_errors
@@ -313,7 +438,14 @@ def evaluate_model(
         y_test, test_errors, metrics["average_precision"], pr_file
     )
     model_card_file = _write_model_card(
-        report_path, checkpoint, metrics, report_metrics_file
+        report_path,
+        checkpoint,
+        metrics,
+        anomaly_type_metrics,
+        report_metrics_file,
+    )
+    updated_readme = _update_readme_evaluation(
+        readme_path, checkpoint, metrics, anomaly_type_metrics
     )
 
     print("Evaluation completed")
@@ -327,6 +459,8 @@ def evaluate_model(
     )
     print(f"Metrics: {metrics_json_file}")
     print(f"Model card: {model_card_file}")
+    if updated_readme is not None:
+        print(f"README metrics updated: {updated_readme}")
     return payload
 
 
@@ -335,11 +469,17 @@ def main() -> None:
     parser.add_argument("--data", default=str(DEFAULT_PREPROCESSED_PATH))
     parser.add_argument("--model", default=str(DEFAULT_MODEL_PATH))
     parser.add_argument("--threshold", type=float)
+    parser.add_argument(
+        "--update-readme",
+        action="store_true",
+        help="Update the generated evaluation block in README.md.",
+    )
     args = parser.parse_args()
 
     evaluate_model(
         data_path=args.data,
         model_path=args.model,
+        readme_path=DEFAULT_README_PATH if args.update_readme else None,
         threshold_override=args.threshold,
     )
 

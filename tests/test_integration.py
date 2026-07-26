@@ -21,6 +21,12 @@ def trained_bundle(tmp_path_factory: pytest.TempPathFactory):
     preprocess_metadata_path = root / "preprocessing_metadata.json"
     scaler_path = root / "scaler.pkl"
     model_path = root / "autoencoder.pt"
+    readme_path = root / "README.md"
+    readme_path.write_text(
+        "# Test\n\n<!-- EVALUATION_RESULTS_START -->\nold\n"
+        "<!-- EVALUATION_RESULTS_END -->\n",
+        encoding="utf-8",
+    )
 
     generate_sensor_data(
         output_path=data_path,
@@ -56,6 +62,7 @@ def trained_bundle(tmp_path_factory: pytest.TempPathFactory):
         pr_curve_path=root / "pr.png",
         report_path=root / "model_card.md",
         report_metrics_path=root / "evaluation_summary.json",
+        readme_path=readme_path,
     )
     predictor = AnomalyPredictor(model_path=model_path, scaler_path=scaler_path)
     return {
@@ -74,10 +81,14 @@ def test_training_outputs_and_metrics(trained_bundle) -> None:
     assert 0 <= metrics["precision"] <= 1
     assert 0 <= metrics["recall"] <= 1
     assert 0 <= metrics["f1_score"] <= 1
+    assert 0 <= metrics["balanced_accuracy"] <= 1
+    assert -1 <= metrics["matthews_correlation_coefficient"] <= 1
     assert metrics["test_size"] == 120
+    assert len(trained_bundle["evaluation"]["anomaly_type_metrics"]) == 5
     assert (root / "model_card.md").exists()
     assert (root / "predictions.csv").exists()
     assert (root / "confusion.png").exists()
+    assert "Model version" in (root / "README.md").read_text(encoding="utf-8")
 
 
 def test_predictor_uses_checkpoint_threshold(trained_bundle) -> None:

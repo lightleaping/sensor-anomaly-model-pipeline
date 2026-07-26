@@ -78,6 +78,11 @@ def preprocess_data(
     X = df.loc[:, feature_list].to_numpy(dtype=np.float32)
     y = df[LABEL_COLUMN].to_numpy(dtype=np.int64)
     source_indices = df.index.to_numpy(dtype=np.int64)
+    split_strata = y
+    if "anomaly_type" in df:
+        anomaly_type_counts = df["anomaly_type"].astype(str).value_counts()
+        if int(anomaly_type_counts.min()) >= 2:
+            split_strata = df["anomaly_type"].astype(str).to_numpy()
 
     (
         X_train_full,
@@ -92,7 +97,27 @@ def preprocess_data(
         source_indices,
         test_size=test_size,
         random_state=random_seed,
-        stratify=y,
+        stratify=split_strata,
+    )
+
+    test_sample_ids = (
+        np.asarray(
+            df.loc[test_indices, "sample_id"].astype(str).tolist(),
+            dtype=np.str_,
+        )
+        if "sample_id" in df
+        else np.asarray([str(index) for index in test_indices], dtype=np.str_)
+    )
+    test_anomaly_types = (
+        np.asarray(
+            df.loc[test_indices, "anomaly_type"].astype(str).tolist(),
+            dtype=np.str_,
+        )
+        if "anomaly_type" in df
+        else np.asarray(
+            np.where(y_test == 1, "anomaly", "normal"),
+            dtype=np.str_,
+        )
     )
 
     normal_train_mask = y_train_full == 0
@@ -126,6 +151,8 @@ def preprocess_data(
         train_indices=train_indices,
         val_indices=val_indices,
         test_indices=test_indices,
+        test_sample_ids=test_sample_ids,
+        test_anomaly_types=test_anomaly_types,
         feature_columns=np.asarray(FEATURE_COLUMNS),
     )
     with scaler_file.open("wb") as file:
@@ -144,6 +171,13 @@ def preprocess_data(
         "test_count": int(len(X_test)),
         "test_normal_count": int((y_test == 0).sum()),
         "test_anomaly_count": int((y_test == 1).sum()),
+        "test_anomaly_type_counts": {
+            key: int(value)
+            for key, value in pd.Series(test_anomaly_types)
+            .value_counts()
+            .sort_index()
+            .items()
+        },
         "test_size": test_size,
         "validation_size_within_normal_train": val_size,
         "random_seed": random_seed,
