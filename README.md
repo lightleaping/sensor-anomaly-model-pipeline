@@ -81,23 +81,15 @@ Sensor Data
 
 ---
 
-## Practical Evaluation Criteria
+## Evaluation Principles
 
-이상 탐지는 Accuracy 하나보다 **미탐, 오탐, Threshold 독립성, Artifact 일관성, Drift 대응 범위**를 함께 확인해야 합니다.
+- Train·Validation·Test 역할을 분리하고 Test를 Threshold 결정에 사용하지 않습니다.
+- Train 정상 데이터로 학습한 Scaler를 평가와 추론에서 그대로 사용합니다.
+- Precision, Recall, F1, Specificity와 Confusion Matrix로 미탐과 오탐을 함께 확인합니다.
+- Checkpoint가 Weight, Threshold, Feature 순서와 Model Version을 함께 보존합니다.
 
-| 실무 관점 | 평가 기준 | 프로젝트에서 확인한 근거 |
-|---|---|---|
-| **데이터 분리** | Test가 학습과 Threshold 결정에 사용되지 않는가 | Stratified Test Split 후 정상 Train과 Validation 분리 |
-| **정상 패턴 학습** | AutoEncoder가 정상 데이터만 학습하는가 | `y_train_full == 0` Filter |
-| **정규화 일관성** | 학습과 추론이 같은 Feature 순서와 Scaler를 사용하는가 | `FEATURE_COLUMNS` 검증, `scaler.pkl` 재사용 |
-| **Threshold 독립성** | Test 결과를 보고 Threshold를 정하지 않는가 | Validation 정상 Error 95 Percentile |
-| **Checkpoint 일관성** | Model과 Threshold가 같은 학습 결과에 묶이는가 | Checkpoint에 Weight, Threshold, Feature 순서 저장 |
-| **미탐과 오탐** | Anomaly Recall과 Normal False Positive를 함께 보는가 | Precision, Recall, F1, Specificity, Confusion Matrix |
-| **추론 설명성** | 어떤 Feature가 Error에 기여했는가 | `feature_errors` Response |
-| **회귀 검증** | 전체 Pipeline이 자동 실행되는가 | pytest, Pipeline Smoke Prediction, GitHub Actions |
-| **범위 설명** | 이상 신호를 고장 원인 진단으로 과장하지 않는가 | Synthetic, Row-level, Non-diagnostic 한계 명시 |
-
-> Pipeline의 Recall과 F1 Quality Gate는 이 합성 데이터 Pipeline의 회귀 검증 기준입니다. 실제 설비의 운영 기준은 미탐과 오탐 비용, 운전 조건, Sensor Drift에 맞춰 별도로 정해야 합니다.
+Quality Gate는 합성 데이터 회귀검증 기준이며 실제 설비의 운영 기준은
+미탐·오탐 비용과 Sensor Drift에 맞춰 별도로 정해야 합니다.
 
 ---
 
@@ -246,86 +238,22 @@ input
 
 ---
 
-## Technical Details
-
-<details open>
-<summary><b>01 | Artifacts and Model Version</b></summary>
-
-<br>
+## Artifacts and Validation
 
 | Artifact | Purpose |
 |---|---|
 | `models/autoencoder.pt` | Weight, Threshold, Feature 순서, Model Version |
 | `models/scaler.pkl` | Train 기준 StandardScaler |
-| `models/model_metadata.json` | Checkpoint Metadata |
-| `outputs/preprocessed_data.npz` | Train, Validation, Test Array와 Index |
-| `outputs/preprocessing_metadata.json` | Row Count, Split, Data Hash |
-| `outputs/train_history.csv` | Epoch별 Train과 Validation Loss |
-| `outputs/training_curve.png` | 학습 곡선 |
 | `outputs/evaluation_metrics.json` | 전체 평가 지표 |
 | `outputs/test_predictions.csv` | Sample별 Label, Prediction, Error |
-| `outputs/confusion_matrix.png` | Normal과 Anomaly Confusion Matrix |
-| `outputs/error_distribution.png` | Class별 Reconstruction Error 분포 |
-| `outputs/precision_recall_curve.png` | Precision Recall Curve |
-| `outputs/run_summary.json` | Pipeline, Quality Gate, Smoke Prediction 결과 |
-| `reports/model_card.md` | Model, 성능, Intended Use, Limitations |
-| `reports/evaluation_summary.json` | 공개용 Machine-readable 평가 결과 |
+| `outputs/run_summary.json` | Quality Gate와 Smoke Prediction 결과 |
+| `reports/model_card.md` | 모델 성능, 용도와 한계 |
 
-Model Version은 Best Weight의 State Fingerprint로 생성됩니다.
-
-</details>
-
-<details>
-<summary><b>02 | Quality Gate and Smoke Inference</b></summary>
-
-<br>
-
-기본 Pipeline Quality Gate:
-
-```text
-Recall >= 0.85
-F1 >= 0.80
-Normal Smoke Sample → normal
-Anomaly Smoke Sample → anomaly
-```
-
-GitHub Actions에서는 실행 시간을 고려해 다음 조건으로 End-to-End Pipeline을 검증합니다.
-
-```text
-Normal 800
-Anomaly 160
-Epochs 80
-Minimum Recall 0.75
-Minimum F1 0.70
-```
-
-이 Threshold는 CI 회귀 검증 기준이며 실제 설비 운영 기준이 아닙니다.
-
-</details>
-
-<details>
-<summary><b>03 | Validation</b></summary>
-
-<br>
-
-현재 공개 Test:
-
-```text
-tests/test_integration.py    3 cases
-tests/test_model.py          3 cases
-```
-
-검증 범위:
-
-- Training Artifact와 Evaluation Metric 생성
-- Predictor가 Checkpoint Threshold 사용
-- 정상과 이상 Smoke Input 비교
-- Feature Error 반환
-- `/health`, `/predict`, Pydantic Validation
-- AutoEncoder Output와 Reconstruction Error Shape
-- 잘못된 Tensor Shape 예외 처리
-
-</details>
+Best Weight의 Fingerprint로 Model Version을 생성합니다. 기본 Pipeline은
+Recall 0.85, F1 0.80과 정상·이상 Smoke Prediction을 확인합니다.
+Pytest 6개는 Artifact 생성, Checkpoint Threshold, Predictor, API 입력 검증과
+AutoEncoder Tensor Shape를 검증하며 GitHub Actions가 축소형 E2E Pipeline을
+함께 실행합니다.
 
 ---
 
@@ -483,56 +411,24 @@ outputs/
 
 ---
 
-## Current Scope and Limitations
+## Scope and Limitations
 
-### Current Scope
+현재 범위는 합성 다변량 데이터, 5개 이상 유형, Row-level AutoEncoder,
+Checkpoint 기반 추론, Held-out Test, CLI·FastAPI와 CI까지입니다.
 
-- 합성 다변량 Sensor Data
-- 5개 합성 이상 유형
-- 한 행 단위 4개 Feature 입력
-- 정상 데이터 기반 AutoEncoder
-- Validation Percentile Threshold
-- Checkpoint 기반 Model, Scaler, Threshold 연결
-- Held-out Test와 유형별 Recall
-- CLI와 FastAPI 추론
-- Model Card와 Machine-readable Summary
-- pytest와 GitHub Actions E2E Pipeline
-
-### Limitations
-
-- 실제 제조 설비 데이터가 아님
-- 시간 순서를 가진 Sequence Window를 사용하지 않음
-- 설비 상태 전환과 장기 추세를 학습하지 않음
-- 합성 이상 유형과 실제 고장 원인의 대응을 보장하지 않음
-- Feature Error는 Reconstruction Error 분해이며 인과 설명이 아님
-- Sensor 교체, 운전 조건 변화, Data Drift 발생 시 Threshold 재보정 필요
-- 이상 판정은 고장 진단이 아니라 점검이 필요한 운영 신호임
-- 인증, Request Logging, Monitoring, Model Registry는 범위 밖
+- 실제 제조 설비 데이터와 시간 Sequence를 학습한 모델이 아닙니다.
+- 합성 이상 유형이 실제 고장 원인과 대응한다고 보장하지 않습니다.
+- Feature Error는 복원 오차 분해이며 인과 설명이 아닙니다.
+- Sensor·운전 조건·Data Drift 변화 시 Scaler와 Threshold 재보정이 필요합니다.
+- 판정 결과는 고장 진단이 아니라 점검이 필요한 운영 신호입니다.
+- 인증, Request Logging, Monitoring과 Model Registry는 범위 밖입니다.
 
 ### Next Steps
 
-1. 실제 또는 공개 설비 Sensor Dataset으로 재학습
-2. Window 기반 LSTM AutoEncoder, 1D CNN과 비교
-3. 운전 Mode별 Model 또는 Conditional Threshold 검토
-4. 비용 기반 Threshold와 Alert Suppression 정책 설계
-5. Data Drift와 Threshold 재보정 기준 추가
-6. Model Registry, Request Log, Monitoring 추가
-7. Batch Inference와 History Dashboard 구현
-
----
-
-## What This Project Demonstrates
-
-- 다변량 Sensor Data 생성과 전처리 경험
-- Train, Validation, Test 역할 분리 경험
-- 정상 데이터 기반 AutoEncoder 학습 경험
-- Early Stopping과 Validation Percentile Threshold 적용 경험
-- Model, Scaler, Threshold, Feature 순서를 Artifact로 연결한 경험
-- Precision, Recall, F1, Confusion Matrix, PR Curve 기반 평가 경험
-- 유형별 이상 탐지 결과와 실패 사례를 구분한 경험
-- CLI와 FastAPI Model Serving 경험
-- pytest와 GitHub Actions로 End-to-End Pipeline을 검증한 경험
-- 다변량 Row Input과 Sequence 기반 Time Series 모델의 차이를 구분한 경험
+1. 실제 설비 Sensor Dataset과 Sequence Window 적용
+2. LSTM AutoEncoder·1D CNN·운전 Mode별 Threshold 비교
+3. 비용 기반 Threshold, Drift 감지와 Alert Suppression 설계
+4. Model Registry, Request Log와 Monitoring 추가
 
 ---
 
