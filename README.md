@@ -1,339 +1,406 @@
-# 다변량 센서 이상 탐지 파이프라인
+# 제조 품질 분석 NLP Agent
 
-> 온도·진동·압력·습도 데이터를 생성하고, 정상 데이터만으로 PyTorch Autoencoder를 학습한 뒤 평가·CLI·FastAPI 추론까지 한 번에 재현하는 프로젝트입니다.
+> **Manufacturing MCP Agent**  
+> 제조 자연어 질문을 Intent로 분류하고, 필요한 분석 Tool을 실행해 **Answer와 Evidence**를 함께 반환하는 제조 데이터 분석 Agent 프로젝트입니다.
 
-![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
-![PyTorch](https://img.shields.io/badge/PyTorch-Autoencoder-EE4C2C?logo=pytorch&logoColor=white)
-![FastAPI](https://img.shields.io/badge/FastAPI-API-009688?logo=fastapi&logoColor=white)
-![CI](https://github.com/lightleaping/sensor-anomaly-model-pipeline/actions/workflows/ci.yml/badge.svg)
+<p>
+  <img src="https://img.shields.io/badge/Python-3.11-3561D8">
+  <img src="https://img.shields.io/badge/FastAPI-API-21AFC4">
+  <img src="https://img.shields.io/badge/LangGraph-Workflow-151F32">
+  <img src="https://img.shields.io/badge/FastMCP-4%20Tools-3561D8">
+  <img src="https://img.shields.io/badge/Docker-CI-5F6675">
+</p>
 
-![센서 이상 탐지 시스템 구조](docs/assets/sensor-anomaly-architecture.svg)
+---
 
-## 프로젝트 목표
+## Why This Project
 
-실제 이상 데이터는 정상 데이터보다 적고, 사전에 정의하지 못한 고장 유형도 발생할 수 있습니다. 이 프로젝트는 정상 상태의 센서 관계를 Autoencoder가 복원하도록 학습하고, 입력의 복원 오차가 정상 Validation 분포에서 정한 Threshold를 넘으면 이상으로 판정합니다.
+제조 현장의 질문은 자연어로 입력되지만, 답을 만들기 위해 필요한 데이터와 계산 방식은 질문마다 다릅니다.
+
+- 불량률 질문은 생산량과 불량 수량 집계가 필요합니다.
+- 센서 이상 질문은 온도, 진동, 압력 기준 확인이 필요합니다.
+- 라인 상태 질문은 생산성과 품질 정보를 함께 요약해야 합니다.
+- 원인 후보 질문은 불량률과 센서 이상 정보를 조합해야 합니다.
+
+모든 질문을 하나의 함수나 고정 답변으로 처리하면 분석 기능이 복잡하게 얽히고, 답변의 근거도 확인하기 어렵습니다. 그래서 **질문 해석, Tool 선택, 데이터 분석, 응답 생성**을 분리하고, 계산 결과와 근거 데이터를 함께 반환하는 구조를 구현했습니다.
+
+---
+
+## Project Overview
+
+| 항목 | 내용 |
+|---|---|
+| **기간** | 2026.04–05 |
+| **형태** | 개인 프로젝트 |
+| **목표** | 제조 자연어 질문을 분석 기능으로 연결하고, 답변과 근거 데이터를 함께 반환 |
+| **프로젝트 범위** | 샘플 제조 데이터, Intent, Router, LangGraph, 분석 Tool, FastMCP Server, FastAPI, PyTorch Model Endpoint, Docker, GitHub Actions, pytest |
+| **NLP 범위** | 질문의 목적을 규칙 기반 Intent로 분류하고 처리 경로를 결정 |
+| **기술** | Python, FastAPI, Pydantic, LangGraph, FastMCP, pandas, SQLite, PyTorch, Docker, GitHub Actions |
+| **구현 결과** | 4 Intents, 4 Agent Tools, 4 MCP Tools, 2 POST Endpoints, 핵심 테스트 9개 |
+
+---
+
+## Problem → Implementation → Result
+
+| Problem | Implementation | Result |
+|---|---|---|
+| 질문마다 필요한 계산 방식이 다름 | Intent와 Router를 두고 기능별 Tool 분리 | 4개 질문 유형을 4개 분석 기능으로 연결 |
+| 답변 문장만으로 결과 검증이 어려움 | Summary와 Evidence Row를 함께 반환 | API 응답에서 답변과 근거 데이터를 동시에 확인 |
+| 목적 표현과 제조 키워드가 섞일 수 있음 | 목적 표현을 우선 확인하는 Routing 규칙 적용 | 복합 질문의 우선순위를 명시 |
+| Agent와 Model 기능의 책임이 혼동될 수 있음 | `/agent/query`와 `/model/sensor-anomaly` 분리 | 규칙 기반 분석과 PyTorch 추론 역할 구분 |
+| 로컬 환경에만 의존할 수 있음 | Docker, Docker Compose, GitHub Actions 구성 | 설치, 테스트, 컨테이너 실행 경로 제공 |
+
+---
+
+## System Overview
+
+<img src="./docs/assets/mcp-system-overview.png" alt="Manufacturing MCP Agent 시스템 구성도" width="100%">
+
+### Responsibility Separation
+
+| Layer | Responsibility |
+|---|---|
+| **Intent** | 질문의 목적을 4개 Intent 중 하나로 분류 |
+| **Router** | Intent에 대응하는 Tool Name 결정 |
+| **Service Tool** | CSV 데이터 로딩, 기간 필터링, 그룹 집계 실행 |
+| **Answer Builder** | Tool Summary를 사용자 Answer로 변환 |
+| **Evidence** | 계산에 사용된 행과 집계 결과를 구조화 |
+| **FastMCP Server** | 동일한 4개 분석 기능을 MCP Tool로 노출 |
+| **Model API** | 3개 센서값을 AutoEncoder에 입력해 이상 점수 반환 |
+
+> `/agent/query`는 Python 내부에서 Service Tool을 직접 호출합니다. FastMCP Server는 동일한 Service 기능을 별도 Tool Interface로 노출하며, Agent API가 MCP Client를 통해 호출되는 구조로 과장하지 않습니다.
+
+---
+
+## Practical Evaluation Criteria
+
+Agent 프로젝트는 하나의 정확도 수치만으로 평가하기 어렵습니다. 질문이 올바른 기능으로 연결되는지, Tool 결과를 검증할 수 있는지, Interface와 실행 환경이 일관적인지를 함께 확인해야 합니다.
+
+| 실무 관점 | 평가 기준 | 프로젝트에서 확인한 근거 |
+|---|---|---|
+| **Routing 정확성** | 대표 질문이 올바른 Intent와 Tool로 연결되는가 | 4개 Intent와 Tool Mapping, Agent Flow Test |
+| **Tool 계약 명확성** | Tool의 목적과 입력값이 구분되는가 | FastMCP `@mcp.tool()` 기반 4개 Tool |
+| **응답 검증 가능성** | Answer가 근거 데이터와 연결되는가 | `question`, `intent`, `tool_name`, `answer`, `evidence` 구조 |
+| **입력 검증** | 잘못된 요청이 실행 전에 차단되는가 | FastAPI와 Pydantic Schema |
+| **책임 분리** | Agent 분석과 Model 추론이 섞이지 않는가 | Agent Endpoint와 Model Endpoint 분리 |
+| **재현성** | 다른 환경에서도 설치와 검증이 가능한가 | pytest, Docker, GitHub Actions |
+| **범위 설명** | 규칙 기반 분석과 모델 결과의 한계를 구분하는가 | 규칙 기반 Intent, 휴리스틱 후보, 독립 Model API 명시 |
+
+현재 구현 범위는 Intent와 Tool 책임 분리, Evidence 기반 응답, MCP Tool 노출, API 검증, Container와 CI 구성입니다. 실제 운영 단계에서는 더 큰 Intent 평가 Dataset, 권한 제어, Tool Audit, Timeout, Monitoring이 추가로 필요합니다.
+
+---
+
+## Intent and Tool Mapping
+
+| Intent | Agent / MCP Tool | Question Example | Result |
+|---|---|---|---|
+| `defect_rate` | `get_defect_rate_by_line` | 최근 7일 불량률이 가장 높은 라인은? | 라인별 생산량, 불량량, 불량률 |
+| `sensor_anomaly` | `detect_machine_anomalies` | 진동이 비정상적인 설비를 찾아줘 | 임계값 초과 센서 기록 |
+| `line_performance` | `summarize_line_performance` | LINE_A의 생산성과 품질 상태는? | 생산량, 불량률, 평균 센서값 |
+| `quality_issue_candidates` | `infer_quality_issue_candidates_tool` | 불량 원인 후보를 알려줘 | 불량률과 센서 이상 기반 점검 후보 |
+
+### Routing Priority
 
 ```text
-Synthetic sensor data
-  → validation / cleaning
-  → train / validation / test split
-  → train-only StandardScaler
-  → normal-only Autoencoder training
-  → validation 95th-percentile threshold
-  → held-out test evaluation
-  → CLI / FastAPI inference
+목적 표현 확인
+→ 세부 제조 키워드 확인
+→ Intent 결정
+→ Tool 선택
+→ Summary와 Evidence 반환
 ```
 
-핵심은 모델 파일만 만드는 데서 끝나지 않는 것입니다. Feature 순서, Scaler, Threshold, 모델 버전을 하나의 실행 흐름으로 묶고 테스트와 품질 게이트로 검증합니다.
+“불량 원인”처럼 여러 의미가 섞인 질문은 키워드 개수보다 질문의 목적 표현을 우선해 Routing합니다.
 
-## 구현 완료 범위
+---
 
-| 영역 | 구현 |
+## Agent Workflow
+
+<img src="./docs/assets/mcp-agent-workflow.png" alt="Manufacturing MCP Agent Workflow" width="100%">
+
+| 단계 | 처리 |
 |---|---|
-| 데이터 | 재현 가능한 정상 데이터와 열 과부하·기계 결함·압력 이벤트·누수·복합 결함 생성 |
-| 전처리 | 필수 열·숫자·유한값·Binary Label 검증, Stratified Test Split |
-| 누수 방지 | 정상 Train에서만 Scaler Fit, 정상 Validation에서만 Threshold 산출 |
-| 학습 | PyTorch Autoencoder, Seed 고정, 조기 종료, Best Weight 복원 |
-| Artifact | Model State, Feature 순서, Threshold, Model Version, 학습 설정 저장 |
-| 평가 | Accuracy, Precision, Recall, F1, Specificity, ROC AUC, Average Precision |
-| 시각화 | 학습 곡선, Confusion Matrix, Error 분포, Precision-Recall Curve |
-| 추론 | 단일 샘플 CLI, Feature별 Error 기여도 |
-| API | FastAPI `/health`, `/predict`, Swagger UI, 입력 범위 검증 |
-| 자동화 | 한 명령 End-to-End Pipeline, Smoke Test, Recall/F1 품질 게이트 |
-| 테스트·CI | 독립 임시 학습 기반 Pytest와 GitHub Actions |
+| **Question** | 자연어 제조 질문 입력 |
+| **Classify** | 목적 표현과 제조 키워드로 Intent 결정 |
+| **Select Tool** | Intent에 대응하는 하나의 Tool 선택 |
+| **Process Data** | CSV 또는 SQLite에서 기간 필터링과 집계 수행 |
+| **Return** | Summary는 Answer, 집계 Row는 Evidence로 반환 |
 
-최신 실측 평가는 [Model Card](reports/model_card.md)와 [JSON Summary](reports/evaluation_summary.json)에 저장됩니다. 이 파일들은 실제 `python -m src.pipeline` 실행 결과로 갱신하며 임의 수치를 기록하지 않습니다.
+---
 
-### 검증된 기본 실행 결과
+## Technical Details
 
-Python 3.11.9, Seed 42, 정상 1,500건·이상 300건으로 전체 파이프라인을 실행한 결과입니다.
+### 01 | Agent State and LangGraph
 
-| Metric | Result |
-|---|---:|
-| Accuracy | 0.9333 |
-| Precision | 0.7571 |
-| Recall | 0.8833 |
-| F1 | 0.8154 |
-| Specificity | 0.9433 |
-| ROC AUC | 0.9640 |
-| Average Precision | 0.9351 |
+Agent State에는 다음 정보가 단계별로 추가됩니다.
 
-Confusion Matrix는 TN 283, FP 17, FN 7, TP 53이며, Validation 95 Percentile Threshold는 `0.411495`입니다.
+```text
+question
+→ intent
+→ tool_name
+→ tool_result
+→ answer
+→ evidence
+```
 
-## 빠른 실행
+LangGraph Workflow:
 
-### 1. 환경 구성
+```text
+route_question
+→ call_tool
+→ build_answer
+```
 
-Python 3.11을 기준 런타임으로 사용합니다.
+현재 Intent는 규칙 기반입니다. 대규모 언어 모델을 학습하거나 LLM이 최종 답변을 생성하는 프로젝트로 표현하지 않습니다.
+
+### 02 | Data Layer
+
+| Data | Purpose |
+|---|---|
+| `production_logs` | 라인별 생산량과 작업 정보 |
+| `quality_inspection` | 검사 수량, 불량 수량, 불량 유형 |
+| `machine_sensor_logs` | 온도, 진동, 압력 센서 기록 |
+
+주요 처리:
+
+```text
+CSV Loading
+→ Date Range Filtering
+→ Line Grouping
+→ Sum and Mean Aggregation
+→ Defect Rate Calculation
+→ Threshold-based Sensor Check
+→ Evidence Row Construction
+```
+
+현재 핵심 Agent 분석 흐름은 CSV 기반이며, SQLite Schema와 Loader는 확장 기반으로 준비되어 있습니다.
+
+### 03 | FastMCP Server
+
+`app/mcp_server/server.py`에서 FastMCP Server를 생성하고 4개 Tool을 등록합니다.
+
+```python
+mcp = FastMCP("manufacturing-mcp-agent")
+
+@mcp.tool()
+def defect_rate_by_line(days: int = 7) -> dict:
+    ...
+```
+
+MCP Tool은 분석 로직을 중복 구현하지 않고 `app/services/`의 기존 Service 함수를 호출합니다.
+
+### 04 | Sensor Model Endpoint
+
+입력:
+
+```text
+temperature
+vibration
+pressure
+```
+
+처리:
+
+```text
+3 Sensor Values
+→ Tensor
+→ SensorAutoEncoder
+→ Reconstruction Error
+→ Threshold
+→ anomaly_score and is_anomaly
+```
+
+이 기능은 Agent의 규칙 기반 `sensor_anomaly` Tool과 별도의 Model Serving Endpoint입니다. 현재 공개 구현은 학습된 운영 Weight를 검증한 모델이 아니라, PyTorch 추론 Endpoint 구조를 보여주기 위한 기본 구현입니다.
+
+### 05 | Trace and Validation
+
+Trace Log에는 다음 정보가 JSONL 형식으로 누적됩니다.
+
+```text
+question
+intent
+tool_name
+evidence_count
+status
+```
+
+핵심 테스트 범위:
+
+- Intent와 Agent Flow
+- Tool별 데이터 집계
+- Answer와 Evidence 구조
+- SensorAutoEncoder Service
+- FastAPI Request와 Response
+- Docker와 GitHub Actions 실행 경로
+
+---
+
+## API
+
+### POST `/agent/query`
+
+Request:
+
+```json
+{
+  "question": "최근 7일간 불량률이 가장 높은 라인을 찾아줘."
+}
+```
+
+Response:
+
+```json
+{
+  "question": "최근 7일간 불량률이 가장 높은 라인을 찾아줘.",
+  "intent": "defect_rate",
+  "tool_name": "get_defect_rate_by_line",
+  "answer": "최근 7일 기준 불량률이 가장 높은 라인은 LINE_C입니다.",
+  "evidence": [
+    {
+      "line_id": "LINE_C",
+      "output_qty": 1234,
+      "defect_qty": 54,
+      "avg_defect_rate": 0.0439
+    }
+  ]
+}
+```
+
+### POST `/model/sensor-anomaly`
+
+Request:
+
+```json
+{
+  "temperature": 95.7,
+  "vibration": 5.6,
+  "pressure": 2.4
+}
+```
+
+Response:
+
+```json
+{
+  "temperature": 95.7,
+  "vibration": 5.6,
+  "pressure": 2.4,
+  "anomaly_score": 1023.5,
+  "threshold": 1000.0,
+  "is_anomaly": true,
+  "model": "SensorAutoEncoder"
+}
+```
+
+---
+
+## Run and Verify
+
+### Local
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+python -m pip install -r .\requirements.txt
+python .\scripts_generate_sample_data.py
+uvicorn app.main:app --reload
 ```
 
-macOS 또는 Linux:
-
-```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-```
-
-### 2. 전체 파이프라인 실행
-
-```powershell
-python -m src.pipeline
-```
-
-Windows에서는 다음 Wrapper도 사용할 수 있습니다.
-
-```powershell
-.\scripts\run_pipeline.ps1
-```
-
-이 명령은 다음 작업을 순서대로 수행합니다.
-
-1. 1,500개 정상 Sample과 300개 이상 Sample 생성
-2. 데이터 검증·분할·Scaling
-3. 정상 Sample만 사용해 최대 120 Epoch 학습
-4. Validation 정상 Error의 95 Percentile Threshold 저장
-5. Held-out Test 평가와 그래프 생성
-6. 정상·극단 이상 입력 Smoke Test
-7. 기본 Recall 0.85, F1 0.80 품질 게이트 확인
-
-개발 중 빠른 실행 예시:
-
-```powershell
-python -m src.pipeline `
-  --normal-count 800 `
-  --anomaly-count 160 `
-  --epochs 80 `
-  --minimum-recall 0.75 `
-  --minimum-f1 0.70
-```
-
-## 생성되는 Artifact
-
-| 경로 | 내용 |
-|---|---|
-| `data/sensor_data.csv` | 생성한 센서 데이터와 이상 유형 |
-| `outputs/preprocessed_data.npz` | Scaling된 Train·Validation·Test Split |
-| `outputs/preprocessing_metadata.json` | 데이터 Hash, 사용 행 수, Split 정보 |
-| `models/scaler.pkl` | Train 기준 StandardScaler |
-| `models/autoencoder.pt` | Weight, Threshold, Feature 순서, Model Version |
-| `models/model_metadata.json` | 사람이 확인할 수 있는 Checkpoint Metadata |
-| `outputs/train_history.csv` | Epoch별 Train·Validation Loss |
-| `outputs/training_curve.png` | 학습 곡선 |
-| `outputs/evaluation_metrics.json` | 전체 평가 지표 |
-| `outputs/test_predictions.csv` | Test 입력별 Label, Error, 판정 |
-| `outputs/confusion_matrix.png` | Confusion Matrix |
-| `outputs/error_distribution.png` | 정상·이상 Error 분포와 Threshold |
-| `outputs/precision_recall_curve.png` | Precision-Recall Curve |
-| `outputs/run_summary.json` | 전체 실행·품질 게이트·Smoke Test 결과 |
-| `reports/model_card.md` | 공개 가능한 최신 평가 요약과 한계 |
-
-원본 데이터·Checkpoint·대용량 실행 산출물은 Git에서 제외하고, 재현 가능한 코드와 경량 평가 보고서는 저장소에 유지합니다.
-
-## CLI 추론
-
-정상에 가까운 예:
-
-```powershell
-python -m src.predict `
-  --temperature 30 `
-  --vibration 0.35 `
-  --pressure 100 `
-  --humidity 45
-```
-
-이상 예:
-
-```powershell
-python -m src.predict `
-  --temperature 55 `
-  --vibration 1.6 `
-  --pressure 135 `
-  --humidity 80
-```
-
-CLI와 API는 Threshold를 상수로 복사하지 않습니다. 학습 Checkpoint에 저장된 Threshold와 Feature 순서를 직접 읽으므로 재학습 후에도 같은 판별 기준을 사용합니다.
-
-## FastAPI
-
-먼저 전체 파이프라인으로 모델을 생성한 뒤 서버를 시작합니다.
-
-```powershell
-python -m uvicorn src.app:app --host 127.0.0.1 --port 8000
-```
-
-- Swagger UI: `http://127.0.0.1:8000/docs`
-- Health Check: `http://127.0.0.1:8000/health`
-
-PowerShell 요청 예:
-
-```powershell
-$body = @{
-  temperature = 30
-  vibration = 0.35
-  pressure = 100
-  humidity = 45
-} | ConvertTo-Json
-
-Invoke-RestMethod `
-  -Method Post `
-  -Uri http://127.0.0.1:8000/predict `
-  -ContentType "application/json" `
-  -Body $body
-```
-
-응답 구조:
-
-```json
-{
-  "prediction": "normal",
-  "reconstruction_error": 0.123456,
-  "threshold": 1.234567,
-  "error_margin": -1.111111,
-  "feature_errors": {
-    "temperature": 0.1,
-    "vibration": 0.2,
-    "pressure": 0.1,
-    "humidity": 0.09
-  },
-  "model_version": "sensor-ae-...",
-  "input": {
-    "temperature": 30.0,
-    "vibration": 0.35,
-    "pressure": 100.0,
-    "humidity": 45.0
-  }
-}
-```
-
-위 숫자는 응답 형식 예시입니다. 실제 값은 생성된 Artifact를 사용합니다.
-
-## 단계별 실행
-
-문제 확인이나 실험을 위해 각 단계를 따로 실행할 수 있습니다.
-
-```powershell
-python -m src.generate_data
-python -m src.preprocess
-python -m src.train
-python -m src.evaluate
-```
-
-주요 학습 옵션:
-
-```powershell
-python -m src.train `
-  --epochs 160 `
-  --batch-size 64 `
-  --lr 0.001 `
-  --latent-dim 2 `
-  --hidden-dim 8 `
-  --threshold-percentile 95 `
-  --patience 25
-```
-
-Threshold를 운영 기준으로 임시 재평가할 때만 다음 Override를 사용합니다. 기본 추론은 Checkpoint Threshold를 사용합니다.
-
-```powershell
-python -m src.evaluate --threshold 1.5
-python -m src.predict <센서 인자> --threshold 1.5
-```
-
-## 모델과 평가 설계
-
-### 데이터 역할 분리
-
-- Train: 정상 Sample만 사용해 Weight와 Scaler 학습
-- Validation: 정상 Sample만 사용해 조기 종료와 Threshold 산출
-- Test: 정상·이상 Sample을 함께 사용해 최종 성능 측정
-
-Test Label을 Threshold 선택에 사용하지 않으므로 평가 데이터에 맞춘 기준값 조정을 방지합니다.
-
-### 모델
-
-기본 구조는 `4 → 8 → 2 → 8 → 4` Dense Autoencoder입니다. 현재 입력은 시간 Window가 아닌 한 시점의 네 Feature이므로 작은 Dense Baseline을 사용합니다.
+Swagger UI:
 
 ```text
-reconstruction_error = mean((scaled_input - reconstruction)²)
-
-error > checkpoint.threshold  → anomaly
-error <= checkpoint.threshold → normal
+http://127.0.0.1:8000/docs
 ```
 
-### 평가
-
-Class 불균형에서 Accuracy만으로 성능을 판단하지 않습니다.
-
-- Recall: 실제 이상을 얼마나 놓치지 않았는지
-- Precision: 이상 경보 중 실제 이상의 비율
-- F1: Precision과 Recall의 균형
-- Specificity / False Positive Rate: 정상 오탐 비용
-- ROC AUC / Average Precision: 연속 Error Score의 분리력
-- Confusion Matrix: TN·FP·FN·TP의 실제 개수
-
-Pipeline은 Recall·F1이 설정한 하한보다 낮거나 대표 Smoke Sample을 잘못 분류하면 실패 상태를 기록하고 종료 코드 1을 반환합니다.
-
-## 테스트
+### MCP Server
 
 ```powershell
-python -m pytest -q
+python -m app.mcp_server.server
 ```
 
-테스트는 저장소의 기존 모델 파일에 의존하지 않습니다. 임시 디렉터리에 데이터를 만들고 별도 모델을 학습하여 다음을 검증합니다.
+### Tests
 
-- Model Tensor Shape와 Reconstruction Error
-- 데이터 생성·전처리·학습·평가 Artifact
-- Checkpoint Threshold와 추론 Threshold 일치
-- 정상·이상 단일 입력 추론
-- `/health`, `/predict`, 잘못된 API 입력의 `422` 응답
+```powershell
+python -m pytest .\tests -q
+```
 
-## 프로젝트 구조
+### Docker
+
+```powershell
+docker compose up --build
+```
+
+---
+
+## Project Structure
 
 ```text
-sensor-anomaly-model-pipeline/
-├─ .github/workflows/ci.yml
-├─ docs/assets/
-├─ reports/
-│  ├─ model_card.md
-│  └─ evaluation_summary.json
-├─ scripts/
-│  └─ run_pipeline.ps1
-├─ src/
-│  ├─ artifacts.py
-│  ├─ config.py
-│  ├─ generate_data.py
-│  ├─ preprocess.py
-│  ├─ model.py
-│  ├─ train.py
-│  ├─ evaluate.py
-│  ├─ predict.py
-│  ├─ app.py
-│  └─ pipeline.py
-├─ tests/
-├─ pyproject.toml
-├─ requirements.txt
-└─ README.md
+manufacturing-mcp-agent/
+├── .github/
+│   └── workflows/
+│       └── ci.yml
+├── app/
+│   ├── agent/
+│   │   ├── graph.py
+│   │   ├── prompts.py
+│   │   └── state.py
+│   ├── db/
+│   ├── mcp_server/
+│   │   ├── server.py
+│   │   └── tools.py
+│   ├── models/
+│   ├── services/
+│   ├── config.py
+│   └── main.py
+├── data/
+├── docs/
+│   └── assets/
+├── tests/
+├── Dockerfile
+├── docker-compose.yml
+├── pytest.ini
+├── README.md
+└── requirements.txt
 ```
 
-## 운영 적용 전 확인할 점
+---
 
-현재 프로젝트는 실행 가능한 Row-level Baseline이지만 실제 설비 모델이라고 간주해서는 안 됩니다.
+## Current Scope and Next Steps
 
-- 실제 센서의 허용 범위, 단위, Sampling 주기를 명시해야 합니다.
-- 시간 의존 이상에는 Sliding Window와 LSTM/1D CNN/Transformer 비교가 필요합니다.
-- 설비 상태·운전 모드별 정상 분포가 다르면 조건별 모델 또는 Feature가 필요합니다.
-- Drift Monitoring과 정기 Threshold 재보정이 필요합니다.
-- 경보 비용에 맞춰 Recall과 False Positive Rate의 목표를 합의해야 합니다.
-- Checkpoint와 Pickle Artifact는 신뢰할 수 있는 저장소에서만 로드해야 합니다.
+### Current Scope
 
-## 저장소
+- 공개용 제조 샘플 데이터 기반
+- 규칙 기반 Intent Classification
+- pandas 집계와 임계값 기반 Tool
+- FastMCP Server 4 Tools
+- Agent API와 Model API 분리
+- Docker와 GitHub Actions 구성
+- 인증, 권한, 운영 Monitoring은 범위 밖
 
-- GitHub: [lightleaping/sensor-anomaly-model-pipeline](https://github.com/lightleaping/sensor-anomaly-model-pipeline)
+### Next Steps
+
+1. Intent별 정답 질문 Dataset과 Confusion Matrix 추가
+2. 규칙 기반 Intent와 LLM Structured Intent 비교
+3. Tool Argument와 Output Schema 검증 강화
+4. Tool 호출 Timeout, Audit Log, 권한 제어
+5. Agent Tool과 Model Endpoint의 명시적 연결 정책
+6. 실제 제조 데이터 기반 Threshold와 Drift 기준 설계
+
+---
+
+## What This Project Demonstrates
+
+- 자연어 제조 질문을 기능별 Intent로 분류한 경험
+- Intent, Router, Tool, Answer Builder의 책임을 분리한 경험
+- 답변과 근거 데이터를 구분한 API Response 설계 경험
+- pandas 기반 제조 데이터 필터링과 집계 경험
+- 동일 Service 기능을 FastAPI와 MCP Tool Interface로 노출한 경험
+- Agent API와 PyTorch Model Endpoint의 차이를 구분한 경험
+- Docker와 GitHub Actions로 실행 및 테스트 경로를 구성한 경험
+
+---
+
+## Contact
+
 - Developer: 김수진
+- GitHub: https://github.com/lightleaping
+- Email: workingskyroad@gmail.com
